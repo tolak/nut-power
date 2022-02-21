@@ -4,13 +4,13 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-
 import "hardhat/console.sol";
 
 contract NutPower is Ownable {
     using SafeMath for uint256;
 
     uint256 constant WEEK = 604800;
+    uint256 constant PERIOD_COUNT = 7;
 
     enum Period {
         W1,
@@ -22,7 +22,7 @@ contract NutPower is Ownable {
         W64
     }
 
-    struct LockInfo {
+    struct DepositInfo {
         // Locked NUT amount
         uint256 amount;
         uint256 lastUpdateTime;
@@ -54,9 +54,10 @@ contract NutPower is Ownable {
     mapping (address => uint256) private _allowances;
 
     mapping (address => PowerInfo) powers;
-    mapping (address => mapping (Period => LockInfo)) lockInfos;
+    mapping (address => mapping (Period => DepositInfo)) depositInfos;
     uint256[] multipier = [1, 2, 4, 8, 16, 32, 64];
     mapping (address => mapping (Period => RequestsOfPeriod)) requests;
+    mapping (address => bool) whitelists;
 
     event PowerUp(address indexed who, Period period, uint256 amount);
     event PowerDown(address indexed who, Period period, uint256 amount);
@@ -65,6 +66,11 @@ contract NutPower is Ownable {
 
     modifier onlyGuadge {
         require(msg.sender == guage);
+        _;
+    }
+
+    modifier onlyWhitelist {
+        require(whitelists[msg.sender]);
         _;
     }
 
@@ -78,11 +84,15 @@ contract NutPower is Ownable {
         guage = _guage;
     }
 
+    function adminSetWhitelist(address _who, bool _tag) external onlyOwner {
+        whitelists[_who] = _tag;
+    }
+
     function powerUp(uint256 _amount, Period _period) external {
         require(_amount > 0, "Invalid lock amount");
         IERC20(nut).transferFrom(msg.sender, address(this), _amount);
         powers[msg.sender].free = powers[msg.sender].free.add(_amount.mul(multipier[uint256(_period)]));
-        lockInfos[msg.sender][_period].amount = lockInfos[msg.sender][_period].amount.add(_amount);
+        depositInfos[msg.sender][_period].amount = depositInfos[msg.sender][_period].amount.add(_amount);
 
         emit PowerUp(msg.sender, _period, _amount);
     }
@@ -104,12 +114,12 @@ contract NutPower is Ownable {
     }
 
     function upgrade(uint256 _amount, Period _src, Period _dest) external {
-        uint256 srcLockedAmount = lockInfos[msg.sender][_src].amount;
+        uint256 srcLockedAmount = depositInfos[msg.sender][_src].amount;
         require(_amount > 0 && srcLockedAmount >= _amount, "Invalid upgrade amount");
         require(uint256(_src) < uint256(_dest), 'Invalid period');
 
-        lockInfos[msg.sender][_src].amount = lockInfos[msg.sender][_src].amount.sub(_amount);
-        lockInfos[msg.sender][_dest].amount = lockInfos[msg.sender][_dest].amount.add(_amount);
+        depositInfos[msg.sender][_src].amount = depositInfos[msg.sender][_src].amount.sub(_amount);
+        depositInfos[msg.sender][_dest].amount = depositInfos[msg.sender][_dest].amount.add(_amount);
         powers[msg.sender].free = powers[msg.sender].free.add(_amount.mul(multipier[uint256(_dest).sub(uint256(_src))]));
 
         emit Upgrade(msg.sender, _src, _dest, _amount);
@@ -117,15 +127,13 @@ contract NutPower is Ownable {
 
     function redeem() external {
         uint256 avaliableRedeemNut = 0;
-        for (Period period = 0; period < 7; period++) {
-            RedeemRequest[] memory reqs = requests[msg.sender][period].queue;
-            RedeemRequest[] memory newReqs;
-            for (uint256 idx = requests[msg.sender][period].index; idx < reqs.length; idx++) {
-                uint256 claimable = this._claimableNutOfRequest(reqs[idx]);
-                requests[msg.sender][period].queue[idx].claimed = requests[msg.sender][period].queue[idx].claimed.add(claimable);
-                // Ignore request that has already claimed completely next time.
-                if (requests[msg.sender][period].queue[idx].claimed == requests[msg.sender][period].queue[idx].amount) {
-                    requests[msg.sender][period].index = idx;
+        for (uint256 period = 0; period < PERIOD_COUNT; period++) {
+            for (uint256 idx = requests[msg.sender][Period(period)].index; idx < requests[msg.sender][Period(period)].queue.length; idx++) {
+                uint256 claimable = this._claimableNutOfRequest(requests[msg.sender][Period(period)].queue[idx]);
+                requests[msg.sender][Period(period)].queue[idx].claimed = requests[msg.sender][Period(period)].queue[idx].claimed.add(claimable);
+                // Ignore requests that has already claimed completely next time.
+                if (requests[msg.sender][Period(period)].queue[idx].claimed == requests[msg.sender][Period(period)].queue[idx].amount) {
+                    requests[msg.sender][Period(period)].index = idx;
                 }
 
                 if (claimable > 0) {
@@ -137,6 +145,18 @@ contract NutPower is Ownable {
         require(IERC20(nut).balanceOf(address(this)) > avaliableRedeemNut, "Inceficient balance of NUT");
         IERC20(nut).transfer(msg.sender, avaliableRedeemNut);
         emit Redeemd(msg.sender, avaliableRedeemNut);
+    }
+
+    function lock(address _who, uint256 _amount) external onlyWhitelist {
+        require(powers[_who].free >= _amount, "Inceficient power to lock");
+        powers[_who].free = powers[_who].free.sub(_amount);
+        powers[_who].locked = powers[_who].locked.add(_amount);
+    }
+
+    function unlock(address _who, uint256 _amount) external onlyWhitelist {
+        require(powers[_who].locked >= _amount, "Inceficient power to unlock");
+        powers[_who].free = powers[_who].free.add(_amount);
+        powers[_who].locked = powers[_who].locked.sub(_amount);
     }
 
     function name() external pure returns (string memory)  {
@@ -160,22 +180,8 @@ contract NutPower is Ownable {
         return len;
     }
 
-    function redeemRequestCount(address _who) external view returns (uint256 len) {
-        for (Period period = 0; period < 7; period++) {
-            len = len.add(this.redeemRequestCountOfPeriod(_who, period));
-        }
-        return len;
-    }
-
-    function redeemRequestsOfPeriod(address _who, Period _period) external view returns (RedeemRequest[] memory reqs) {
+    function redeemRequestsOfPeriod(address _who, Period _period) public view returns (RedeemRequest[] memory reqs) {
         reqs = requests[_who][_period].queue;
-        return reqs;
-    }
-    
-    function redeemRequests(address _who, Period _period) external view returns (RedeemRequest[] memory reqs) {
-        for (Period period = 0; period < 7; period++) {
-            reqs = reqs.push(this.RedeemRequestsOfPeriod(_who, period));
-        }
         return reqs;
     }
 
@@ -185,21 +191,20 @@ contract NutPower is Ownable {
     }
 
     function lastRedeemRequest(address _who, Period _period) external view returns (RedeemRequest memory req) {
-        req = requests[_who][_period].queue[this.redeemRequestCount(_period).sub(1)];
+        req = requests[_who][_period].queue[this.redeemRequestCountOfPeriod(_who, _period).sub(1)];
         return req;
     }
 
     function claimableNut(address _who) external view returns (uint256 amount) {
-        for (Period period = 0; period < 7; period++) {
-            RedeemRequest[] memory reqs = requests[_who][period].queue;
-            for (uint256 idx = requests[_who][period].index; idx < reqs.length; idx++) {
-                amount = amount.add(this._claimableNutOfRequest(reqs[idx]));
+        for (uint256 period = 0; period < PERIOD_COUNT; period++) {
+            for (uint256 idx = requests[_who][Period(period)].index; idx < requests[_who][Period(period)].queue.length; idx++) {
+                amount = amount.add(this._claimableNutOfRequest(requests[_who][Period(period)].queue[idx]));
             }
         }
         return amount;
     }
 
-    function _claimableNutOfRequest(RedeemRequest _req) private view returns (uint256 amount) {
+    function _claimableNutOfRequest(RedeemRequest memory _req) public view returns (uint256 amount) {
         amount = _req.amount
                 .mul(block.timestamp.sub(_req.startTime))
                 .div(_req.endTime.sub(_req.startTime))
