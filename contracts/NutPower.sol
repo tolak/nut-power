@@ -81,22 +81,21 @@ contract NutPower is Ownable {
         whitelists[_who] = _tag;
     }
 
-    function powerUp(uint256 _amount, Period _period) external {
-        require(_amount > 0, "Invalid lock amount");
-        IERC20(nut).transferFrom(msg.sender, address(this), _amount);
-        powers[msg.sender].free = powers[msg.sender].free.add(_amount.mul(multipier[uint256(_period)]));
-        depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].add(_amount);
+    function powerUp(uint256 _nutAmount, Period _period) external {
+        require(_nutAmount > 0, "Invalid lock amount");
+        IERC20(nut).transferFrom(msg.sender, address(this), _nutAmount);
+        powers[msg.sender].free = powers[msg.sender].free.add(_nutAmount.mul(multipier[uint256(_period)]));
+        depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].add(_nutAmount);
 
-        emit PowerUp(msg.sender, _period, _amount);
+        emit PowerUp(msg.sender, _period, _nutAmount);
     }
 
-    // _amount: NUT Power
-    function powerDown(uint256 _amount, Period _period) external {
-        uint256 downNut = _amount.div(uint256(_period) + 1);
-        require(_amount > 0, "Invalid unlock NP");
+    function powerDown(uint256 _npAmount, Period _period) external {
+        uint256 downNut = _npAmount.div(uint256(_period) + 1);
+        require(_npAmount > 0, "Invalid unlock NP");
         require(depositInfos[msg.sender][_period] >= downNut, "Insufficient free NUT");
 
-        powers[msg.sender].free = powers[msg.sender].free.sub(_amount);
+        powers[msg.sender].free = powers[msg.sender].free.sub(_npAmount);
         depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].sub(downNut);
         // Add to redeem request queue
         requests[msg.sender][_period].queue.push(RedeemRequest ({
@@ -105,19 +104,19 @@ contract NutPower is Ownable {
             startTime: block.timestamp,
             endTime: block.timestamp.add(WEEK.mul(uint256(_period) + 1))
         }));
-        emit PowerDown(msg.sender, _period, _amount);
+        emit PowerDown(msg.sender, _period, _npAmount);
     }
 
-    function upgrade(uint256 _amount, Period _src, Period _dest) external {
+    function upgrade(uint256 _nutAmount, Period _src, Period _dest) external {
         uint256 srcLockedAmount = depositInfos[msg.sender][_src];
-        require(_amount > 0 && srcLockedAmount >= _amount, "Invalid upgrade amount");
+        require(_nutAmount > 0 && srcLockedAmount >= _nutAmount, "Invalid upgrade amount");
         require(uint256(_src) < uint256(_dest), 'Invalid period');
 
-        depositInfos[msg.sender][_src] = depositInfos[msg.sender][_src].sub(_amount);
-        depositInfos[msg.sender][_dest] = depositInfos[msg.sender][_dest].add(_amount);
-        powers[msg.sender].free = powers[msg.sender].free.add(_amount.mul(multipier[uint256(_dest).sub(uint256(_src))]));
+        depositInfos[msg.sender][_src] = depositInfos[msg.sender][_src].sub(_nutAmount);
+        depositInfos[msg.sender][_dest] = depositInfos[msg.sender][_dest].add(_nutAmount);
+        powers[msg.sender].free = powers[msg.sender].free.add(_nutAmount.mul(multipier[uint256(_dest).sub(uint256(_src))]));
 
-        emit Upgrade(msg.sender, _src, _dest, _amount);
+        emit Upgrade(msg.sender, _src, _dest, _nutAmount);
     }
 
     function redeem() external {
@@ -142,16 +141,16 @@ contract NutPower is Ownable {
         emit Redeemd(msg.sender, avaliableRedeemNut);
     }
 
-    function lock(address _who, uint256 _amount) external onlyWhitelist {
-        require(powers[_who].free >= _amount, "Inceficient power to lock");
-        powers[_who].free = powers[_who].free.sub(_amount);
-        powers[_who].locked = powers[_who].locked.add(_amount);
+    function lock(address _who, uint256 _npAmount) external onlyWhitelist {
+        require(powers[_who].free >= _npAmount, "Inceficient power to lock");
+        powers[_who].free = powers[_who].free.sub(_npAmount);
+        powers[_who].locked = powers[_who].locked.add(_npAmount);
     }
 
-    function unlock(address _who, uint256 _amount) external onlyWhitelist {
-        require(powers[_who].locked >= _amount, "Inceficient power to unlock");
-        powers[_who].free = powers[_who].free.add(_amount);
-        powers[_who].locked = powers[_who].locked.sub(_amount);
+    function unlock(address _who, uint256 _npAmount) external onlyWhitelist {
+        require(powers[_who].locked >= _npAmount, "Inceficient power to unlock");
+        powers[_who].free = powers[_who].free.add(_npAmount);
+        powers[_who].locked = powers[_who].locked.sub(_npAmount);
     }
 
     function name() external pure returns (string memory)  {
