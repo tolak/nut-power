@@ -1,5 +1,6 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.8.0;
+pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
@@ -74,6 +75,10 @@ contract NutPower is Ownable {
         gauge = _gauge;
     }
 
+    function adminSetNut(address _nut) external onlyOwner {
+        nut = _nut;
+    }
+
     function adminSetGauge(address _gauge) external onlyOwner {
         gauge = _gauge;
     }
@@ -117,7 +122,11 @@ contract NutPower is Ownable {
 
         depositInfos[msg.sender][_src] = depositInfos[msg.sender][_src].sub(_nutAmount);
         depositInfos[msg.sender][_dest] = depositInfos[msg.sender][_dest].add(_nutAmount);
-        powers[msg.sender].free = powers[msg.sender].free.add(_nutAmount.mul(multipier[uint256(_dest).sub(uint256(_src))]));
+        powers[msg.sender].free = powers[msg.sender].free.add(
+            _nutAmount.mul(
+                multipier[uint256(_dest)].sub(multipier[uint256(_src)])
+            )
+        );
 
         emit Upgrade(msg.sender, _src, _dest, _nutAmount);
     }
@@ -126,7 +135,7 @@ contract NutPower is Ownable {
         uint256 avaliableRedeemNut = 0;
         for (uint256 period = 0; period < PERIOD_COUNT; period++) {
             for (uint256 idx = requests[msg.sender][Period(period)].index; idx < requests[msg.sender][Period(period)].queue.length; idx++) {
-                uint256 claimable = this._claimableNutOfRequest(requests[msg.sender][Period(period)].queue[idx]);
+                uint256 claimable = _claimableNutOfRequest(requests[msg.sender][Period(period)].queue[idx]);
                 requests[msg.sender][Period(period)].queue[idx].claimed = requests[msg.sender][Period(period)].queue[idx].claimed.add(claimable);
                 // Ignore requests that has already claimed completely next time.
                 if (requests[msg.sender][Period(period)].queue[idx].claimed == requests[msg.sender][Period(period)].queue[idx].amount) {
@@ -175,39 +184,56 @@ contract NutPower is Ownable {
     }
 
     function redeemRequestCountOfPeriod(address _who, Period _period) external view returns (uint256 len) {
-        len = requests[_who][_period].queue.length;
+        len = requests[_who][_period].queue.length - requests[_who][_period].index - 1;
         return len;
     }
 
-    function redeemRequestsOfPeriod(address _who, Period _period) public view returns (RedeemRequest[] memory reqs) {
-        reqs = requests[_who][_period].queue;
+    function redeemRequestsOfPeriod(address _who, Period _period) external view returns (RedeemRequest[] memory reqs) {
+        reqs = new RedeemRequest[](this.redeemRequestCountOfPeriod(_who, _period));
+        for (uint i = requests[_who][_period].index; i < requests[_who][_period].queue.length; i++) {
+            RedeemRequest storage req = requests[_who][_period].queue[i];
+            reqs[i] = req;
+        }
         return reqs;
     }
 
     function firstRedeemRequest(address _who, Period _period) external view returns (RedeemRequest memory req) {
-        req = requests[_who][_period].queue[requests[_who][_period].index];
+        if (requests[_who][_period].queue.length > 0) {
+            req = requests[_who][_period].queue[requests[_who][_period].index];
+        }
         return req;
     }
 
     function lastRedeemRequest(address _who, Period _period) external view returns (RedeemRequest memory req) {
-        req = requests[_who][_period].queue[this.redeemRequestCountOfPeriod(_who, _period).sub(1)];
+        if (requests[_who][_period].queue.length > 0) {
+            req = requests[_who][_period].queue[requests[_who][_period].queue.length - 1];
+        }
         return req;
     }
 
     function claimableNut(address _who) external view returns (uint256 amount) {
         for (uint256 period = 0; period < PERIOD_COUNT; period++) {
             for (uint256 idx = requests[_who][Period(period)].index; idx < requests[_who][Period(period)].queue.length; idx++) {
-                amount = amount.add(this._claimableNutOfRequest(requests[_who][Period(period)].queue[idx]));
+                amount = amount.add(_claimableNutOfRequest(requests[_who][Period(period)].queue[idx]));
             }
         }
         return amount;
     }
 
-    function _claimableNutOfRequest(RedeemRequest memory _req) public view returns (uint256 amount) {
-        amount = _req.amount
-                .mul(block.timestamp.sub(_req.startTime))
-                .div(_req.endTime.sub(_req.startTime))
-                .sub(_req.claimed);
+    function lockedNutOfPeriod(address _who, Period _period) external view returns (uint256 amount) {
+        amount = depositInfos[_who][_period];
+        return amount;
+    }
+
+    function _claimableNutOfRequest(RedeemRequest memory _req) private view returns (uint256 amount) {
+        if (block.timestamp >= _req.endTime) {
+            amount = _req.amount.sub(_req.claimed);
+        } else {
+            amount = _req.amount
+                    .mul(block.timestamp.sub(_req.startTime))
+                    .div(_req.endTime.sub(_req.startTime))
+                    .sub(_req.claimed);
+        }
 
         return amount;
     }
