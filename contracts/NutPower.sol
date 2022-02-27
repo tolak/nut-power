@@ -97,18 +97,20 @@ contract NutPower is Ownable {
         emit PowerUp(msg.sender, _period, _amount);
     }
 
+    // _amount: NUT Power
     function powerDown(uint256 _amount, Period _period) external {
-        uint256 downPower = _amount.mul(uint256(_period));
-        require(_amount > 0, "Invalid unlock amount");
-        require(powers[msg.sender].free >= downPower, "Insufficient free NP");
+        uint256 downNut = _amount.div(uint256(_period) + 1);
+        require(_amount > 0, "Invalid unlock NP");
+        require(depositInfos[msg.sender][_period].amount >= downNut, "Insufficient free NUT");
 
-        powers[msg.sender].free = powers[msg.sender].free.sub(downPower);
+        powers[msg.sender].free = powers[msg.sender].free.sub(_amount);
+        depositInfos[msg.sender][_period].amount = depositInfos[msg.sender][_period].amount.sub(downNut);
         // Add to redeem request queue
         requests[msg.sender][_period].queue.push(RedeemRequest ({
-            amount: _amount,
+            amount: downNut,
             claimed: 0,
             startTime: block.timestamp,
-            endTime: block.timestamp
+            endTime: block.timestamp.add(WEEK.mul(uint256(_period) + 1))
         }));
         emit PowerDown(msg.sender, _period, _amount);
     }
