@@ -41,6 +41,7 @@ contract NutPower is Ownable {
         uint256 locked;
     }
 
+    uint256 public totalLockedNut;
     address private nut;
     address private gauge;
 
@@ -84,6 +85,8 @@ contract NutPower is Ownable {
     function powerUp(uint256 _nutAmount, Period _period) external {
         require(_nutAmount > 0, "Invalid lock amount");
         IERC20(nut).transferFrom(msg.sender, address(this), _nutAmount);
+        // NUT is locked
+        totalLockedNut = totalLockedNut.add(_nutAmount);
         powers[msg.sender].free = powers[msg.sender].free.add(_nutAmount.mul(multipier[uint256(_period)]));
         depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].add(_nutAmount);
 
@@ -138,6 +141,8 @@ contract NutPower is Ownable {
 
         require(IERC20(nut).balanceOf(address(this)) > avaliableRedeemNut, "Inceficient balance of NUT");
         IERC20(nut).transfer(msg.sender, avaliableRedeemNut);
+        // NUT is free
+        totalLockedNut = totalLockedNut.sub(avaliableRedeemNut);
         emit Redeemd(msg.sender, avaliableRedeemNut);
     }
 
