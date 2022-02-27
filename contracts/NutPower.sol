@@ -22,12 +22,6 @@ contract NutPower is Ownable {
         W64
     }
 
-    struct DepositInfo {
-        // Locked NUT amount
-        uint256 amount;
-        uint256 lastUpdateTime;
-    }
-
     struct RedeemRequest {
         uint256 amount;
         uint256 claimed;
@@ -48,13 +42,12 @@ contract NutPower is Ownable {
     }
 
     address private nut;
-    address private guage;
+    address private gauge;
 
-    uint256 private totalSupple;
     mapping (address => uint256) private _allowances;
 
     mapping (address => PowerInfo) powers;
-    mapping (address => mapping (Period => DepositInfo)) depositInfos;
+    mapping (address => mapping (Period => uint256)) depositInfos;
     uint256[] multipier = [1, 2, 4, 8, 16, 32, 64];
     mapping (address => mapping (Period => RequestsOfPeriod)) requests;
     mapping (address => bool) whitelists;
@@ -64,8 +57,8 @@ contract NutPower is Ownable {
     event Upgrade(address indexed who, Period src, Period dest, uint256 amount);
     event Redeemd(address indexed who, uint256 amount);
 
-    modifier onlyGuadge {
-        require(msg.sender == guage);
+    modifier onlyGaudge {
+        require(msg.sender == gauge);
         _;
     }
 
@@ -74,14 +67,14 @@ contract NutPower is Ownable {
         _;
     }
 
-    constructor(address _nut, address _guage) {
+    constructor(address _nut, address _gauge) {
         console.log("Deploying a NutPower with nut:", _nut);
         nut = _nut;
-        guage = _guage;
+        gauge = _gauge;
     }
 
-    function adminSetGuage(address _guage) external onlyOwner {
-        guage = _guage;
+    function adminSetGauge(address _gauge) external onlyOwner {
+        gauge = _gauge;
     }
 
     function adminSetWhitelist(address _who, bool _tag) external onlyOwner {
@@ -92,7 +85,7 @@ contract NutPower is Ownable {
         require(_amount > 0, "Invalid lock amount");
         IERC20(nut).transferFrom(msg.sender, address(this), _amount);
         powers[msg.sender].free = powers[msg.sender].free.add(_amount.mul(multipier[uint256(_period)]));
-        depositInfos[msg.sender][_period].amount = depositInfos[msg.sender][_period].amount.add(_amount);
+        depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].add(_amount);
 
         emit PowerUp(msg.sender, _period, _amount);
     }
@@ -101,10 +94,10 @@ contract NutPower is Ownable {
     function powerDown(uint256 _amount, Period _period) external {
         uint256 downNut = _amount.div(uint256(_period) + 1);
         require(_amount > 0, "Invalid unlock NP");
-        require(depositInfos[msg.sender][_period].amount >= downNut, "Insufficient free NUT");
+        require(depositInfos[msg.sender][_period] >= downNut, "Insufficient free NUT");
 
         powers[msg.sender].free = powers[msg.sender].free.sub(_amount);
-        depositInfos[msg.sender][_period].amount = depositInfos[msg.sender][_period].amount.sub(downNut);
+        depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].sub(downNut);
         // Add to redeem request queue
         requests[msg.sender][_period].queue.push(RedeemRequest ({
             amount: downNut,
@@ -116,12 +109,12 @@ contract NutPower is Ownable {
     }
 
     function upgrade(uint256 _amount, Period _src, Period _dest) external {
-        uint256 srcLockedAmount = depositInfos[msg.sender][_src].amount;
+        uint256 srcLockedAmount = depositInfos[msg.sender][_src];
         require(_amount > 0 && srcLockedAmount >= _amount, "Invalid upgrade amount");
         require(uint256(_src) < uint256(_dest), 'Invalid period');
 
-        depositInfos[msg.sender][_src].amount = depositInfos[msg.sender][_src].amount.sub(_amount);
-        depositInfos[msg.sender][_dest].amount = depositInfos[msg.sender][_dest].amount.add(_amount);
+        depositInfos[msg.sender][_src] = depositInfos[msg.sender][_src].sub(_amount);
+        depositInfos[msg.sender][_dest] = depositInfos[msg.sender][_dest].add(_amount);
         powers[msg.sender].free = powers[msg.sender].free.add(_amount.mul(multipier[uint256(_dest).sub(uint256(_src))]));
 
         emit Upgrade(msg.sender, _src, _dest, _amount);
