@@ -5,7 +5,6 @@ pragma experimental ABIEncoderV2;
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "hardhat/console.sol";
 
 contract NutPower is Ownable {
     using SafeMath for uint256;
@@ -43,8 +42,8 @@ contract NutPower is Ownable {
     }
 
     uint256 public totalLockedNut;
-    address private nut;
-    address private gauge;
+    address public nut;
+    address public gauge;
 
     mapping (address => uint256) private _allowances;
 
@@ -59,18 +58,12 @@ contract NutPower is Ownable {
     event Upgrade(address indexed who, Period src, Period dest, uint256 amount);
     event Redeemd(address indexed who, uint256 amount);
 
-    modifier onlyGaudge {
-        require(msg.sender == gauge);
-        _;
-    }
-
     modifier onlyWhitelist {
-        require(whitelists[msg.sender]);
+        require(whitelists[msg.sender], "Address is not whitelisted");
         _;
     }
 
     constructor(address _nut, address _gauge) {
-        console.log("Deploying a NutPower with nut:", _nut);
         nut = _nut;
         gauge = _gauge;
     }
@@ -80,6 +73,8 @@ contract NutPower is Ownable {
     }
 
     function adminSetGauge(address _gauge) external onlyOwner {
+        whitelists[gauge] = false;
+        whitelists[_gauge] = true;
         gauge = _gauge;
     }
 
@@ -99,7 +94,7 @@ contract NutPower is Ownable {
     }
 
     function powerDown(uint256 _npAmount, Period _period) external {
-        uint256 downNut = _npAmount.div(uint256(_period) + 1);
+        uint256 downNut = _npAmount.div(multipier[uint256(_period)]);
         require(_npAmount > 0, "Invalid unlock NP");
         require(depositInfos[msg.sender][_period] >= downNut, "Insufficient free NUT");
 
@@ -110,7 +105,7 @@ contract NutPower is Ownable {
             amount: downNut,
             claimed: 0,
             startTime: block.timestamp,
-            endTime: block.timestamp.add(WEEK.mul(uint256(_period) + 1))
+            endTime: block.timestamp.add(WEEK.mul(multipier[uint256(_period)]))
         }));
         emit PowerDown(msg.sender, _period, _npAmount);
     }
@@ -139,7 +134,7 @@ contract NutPower is Ownable {
                 requests[msg.sender][Period(period)].queue[idx].claimed = requests[msg.sender][Period(period)].queue[idx].claimed.add(claimable);
                 // Ignore requests that has already claimed completely next time.
                 if (requests[msg.sender][Period(period)].queue[idx].claimed == requests[msg.sender][Period(period)].queue[idx].amount) {
-                    requests[msg.sender][Period(period)].index = idx;
+                    requests[msg.sender][Period(period)].index = idx + 1;
                 }
 
                 if (claimable > 0) {
@@ -184,7 +179,7 @@ contract NutPower is Ownable {
     }
 
     function redeemRequestCountOfPeriod(address _who, Period _period) external view returns (uint256 len) {
-        len = requests[_who][_period].queue.length - requests[_who][_period].index - 1;
+        len = requests[_who][_period].queue.length - requests[_who][_period].index;
         return len;
     }
 
