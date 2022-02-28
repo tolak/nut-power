@@ -5,8 +5,9 @@ pragma experimental ABIEncoderV2;
 import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract NutPower is Ownable {
+contract NutPower is Ownable, ReentrancyGuard {
     using SafeMath for uint256;
 
     uint256 constant WEEK = 604800;
@@ -42,10 +43,9 @@ contract NutPower is Ownable {
     }
 
     uint256 public totalLockedNut;
+    uint256 public totalIssuedNp;
+    uint256 public totalLockedNp;
     address public nut;
-    address public gauge;
-
-    mapping (address => uint256) private _allowances;
 
     mapping (address => PowerInfo) powers;
     mapping (address => mapping (Period => uint256)) depositInfos;
@@ -63,42 +63,39 @@ contract NutPower is Ownable {
         _;
     }
 
-    constructor(address _nut, address _gauge) {
+    constructor(address _nut) {
         nut = _nut;
-        gauge = _gauge;
     }
 
     function adminSetNut(address _nut) external onlyOwner {
         nut = _nut;
     }
 
-    function adminSetGauge(address _gauge) external onlyOwner {
-        whitelists[gauge] = false;
-        whitelists[_gauge] = true;
-        gauge = _gauge;
-    }
-
     function adminSetWhitelist(address _who, bool _tag) external onlyOwner {
         whitelists[_who] = _tag;
     }
 
-    function powerUp(uint256 _nutAmount, Period _period) external {
+    function powerUp(uint256 _nutAmount, Period _period) external nonReentrant {
         require(_nutAmount > 0, "Invalid lock amount");
+        uint256 issuedNp = _nutAmount.mul(multipier[uint256(_period)]);
         IERC20(nut).transferFrom(msg.sender, address(this), _nutAmount);
         // NUT is locked
         totalLockedNut = totalLockedNut.add(_nutAmount);
-        powers[msg.sender].free = powers[msg.sender].free.add(_nutAmount.mul(multipier[uint256(_period)]));
+        powers[msg.sender].free = powers[msg.sender].free.add(issuedNp);
+        totalIssuedNp = totalIssuedNp.add(issuedNp);
         depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].add(_nutAmount);
 
         emit PowerUp(msg.sender, _period, _nutAmount);
     }
 
-    function powerDown(uint256 _npAmount, Period _period) external {
+    function powerDown(uint256 _npAmount, Period _period) external nonReentrant {
         uint256 downNut = _npAmount.div(multipier[uint256(_period)]);
         require(_npAmount > 0, "Invalid unlock NP");
+        require(powers[msg.sender].free >= _npAmount, "Insufficient free NP");
         require(depositInfos[msg.sender][_period] >= downNut, "Insufficient free NUT");
 
         powers[msg.sender].free = powers[msg.sender].free.sub(_npAmount);
+        totalIssuedNp = totalIssuedNp.sub(_npAmount);
         depositInfos[msg.sender][_period] = depositInfos[msg.sender][_period].sub(downNut);
         // Add to redeem request queue
         requests[msg.sender][_period].queue.push(RedeemRequest ({
@@ -110,23 +107,21 @@ contract NutPower is Ownable {
         emit PowerDown(msg.sender, _period, _npAmount);
     }
 
-    function upgrade(uint256 _nutAmount, Period _src, Period _dest) external {
+    function upgrade(uint256 _nutAmount, Period _src, Period _dest) external nonReentrant {
         uint256 srcLockedAmount = depositInfos[msg.sender][_src];
         require(_nutAmount > 0 && srcLockedAmount >= _nutAmount, "Invalid upgrade amount");
         require(uint256(_src) < uint256(_dest), 'Invalid period');
+        uint256 issuedNp = _nutAmount.mul(multipier[uint256(_dest)].sub(multipier[uint256(_src)]));
 
         depositInfos[msg.sender][_src] = depositInfos[msg.sender][_src].sub(_nutAmount);
         depositInfos[msg.sender][_dest] = depositInfos[msg.sender][_dest].add(_nutAmount);
-        powers[msg.sender].free = powers[msg.sender].free.add(
-            _nutAmount.mul(
-                multipier[uint256(_dest)].sub(multipier[uint256(_src)])
-            )
-        );
+        powers[msg.sender].free = powers[msg.sender].free.add(issuedNp);
+        totalIssuedNp = totalIssuedNp.add(issuedNp);
 
         emit Upgrade(msg.sender, _src, _dest, _nutAmount);
     }
 
-    function redeem() external {
+    function redeem() external nonReentrant {
         uint256 avaliableRedeemNut = 0;
         for (uint256 period = 0; period < PERIOD_COUNT; period++) {
             for (uint256 idx = requests[msg.sender][Period(period)].index; idx < requests[msg.sender][Period(period)].queue.length; idx++) {
@@ -154,12 +149,14 @@ contract NutPower is Ownable {
         require(powers[_who].free >= _npAmount, "Inceficient power to lock");
         powers[_who].free = powers[_who].free.sub(_npAmount);
         powers[_who].locked = powers[_who].locked.add(_npAmount);
+        totalLockedNp = totalLockedNp.add(_npAmount);
     }
 
     function unlock(address _who, uint256 _npAmount) external onlyWhitelist {
         require(powers[_who].locked >= _npAmount, "Inceficient power to unlock");
         powers[_who].free = powers[_who].free.add(_npAmount);
         powers[_who].locked = powers[_who].locked.sub(_npAmount);
+        totalLockedNp = totalLockedNp.sub(_npAmount);
     }
 
     function name() external pure returns (string memory)  {
@@ -180,7 +177,6 @@ contract NutPower is Ownable {
 
     function redeemRequestCountOfPeriod(address _who, Period _period) external view returns (uint256 len) {
         len = requests[_who][_period].queue.length - requests[_who][_period].index;
-        return len;
     }
 
     function redeemRequestsOfPeriod(address _who, Period _period) external view returns (RedeemRequest[] memory reqs) {
@@ -189,21 +185,18 @@ contract NutPower is Ownable {
             RedeemRequest storage req = requests[_who][_period].queue[i];
             reqs[i] = req;
         }
-        return reqs;
     }
 
     function firstRedeemRequest(address _who, Period _period) external view returns (RedeemRequest memory req) {
         if (requests[_who][_period].queue.length > 0) {
             req = requests[_who][_period].queue[requests[_who][_period].index];
         }
-        return req;
     }
 
     function lastRedeemRequest(address _who, Period _period) external view returns (RedeemRequest memory req) {
         if (requests[_who][_period].queue.length > 0) {
             req = requests[_who][_period].queue[requests[_who][_period].queue.length - 1];
         }
-        return req;
     }
 
     function claimableNut(address _who) external view returns (uint256 amount) {
@@ -212,12 +205,10 @@ contract NutPower is Ownable {
                 amount = amount.add(_claimableNutOfRequest(requests[_who][Period(period)].queue[idx]));
             }
         }
-        return amount;
     }
 
     function lockedNutOfPeriod(address _who, Period _period) external view returns (uint256 amount) {
         amount = depositInfos[_who][_period];
-        return amount;
     }
 
     function _claimableNutOfRequest(RedeemRequest memory _req) private view returns (uint256 amount) {
@@ -229,7 +220,5 @@ contract NutPower is Ownable {
                     .div(_req.endTime.sub(_req.startTime))
                     .sub(_req.claimed);
         }
-
-        return amount;
     }
 }

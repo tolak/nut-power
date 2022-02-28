@@ -21,7 +21,7 @@ describe("NutPower Test", () => {
 
         // Deploy NutPower
         const NutPower = await ethers.getContractFactory("NutPower");
-        const _nutpower = await NutPower.deploy(nut.address, "0x0000000000000000000000000000000000000000");
+        const _nutpower = await NutPower.deploy(nut.address);
         await _nutpower.deployed();
         nutpower = _nutpower;
 
@@ -39,8 +39,6 @@ describe("NutPower Test", () => {
     it("Admin methods test", async () => {
         await expect(nutpower.connect(addr1).adminSetNut("0x0000000000000000000000000000000000000000"))
             .revertedWith("Ownable: caller is not the owner")
-        await expect(nutpower.connect(addr1).adminSetGauge("0x0000000000000000000000000000000000000000"))
-            .revertedWith("Ownable: caller is not the owner")
         await expect(nutpower.connect(addr1).adminSetWhitelist("0x0000000000000000000000000000000000000000", true))
             .revertedWith("Ownable: caller is not the owner")
 
@@ -48,8 +46,6 @@ describe("NutPower Test", () => {
         expect(await nutpower.nut()).equal(addr1.address);
         await expect(nutpower.connect(addr1).lock(addr1.address, 0))
             .revertedWith("Address is not whitelisted")
-        await nutpower.connect(owner).adminSetGauge(addr1.address);
-        expect(await nutpower.gauge()).equal(addr1.address);
     });
 
     it("Power up test", async () => {
@@ -69,10 +65,11 @@ describe("NutPower Test", () => {
         await nutpower.connect(addr1).powerUp(bn1e18.mul(new BN(100)).toString(), 2);
         expect((await nutpower.balanceOf(addr1.address)).free).equal(bn1e18.mul(new BN(400)).toString());
         expect(await nutpower.totalLockedNut()).equal(bn1e18.mul(new BN(100)).toString());
+        expect(await nutpower.totalIssuedNp()).equal(bn1e18.mul(new BN(400)).toString());
 
         // addr1 power down  500 NP
         await expect(nutpower.connect(addr1).powerDown(bn1e18.mul(new BN(500)).toString(), 2))
-            .revertedWith("Insufficient free NUT")
+            .revertedWith("Insufficient free NP")
         // addr1 power down 200 NP(half of total NP of addr1)
         await nutpower.connect(addr1).powerDown(bn1e18.mul(new BN(200)).toString(), 2);
         // Total locked nut not changed before redeem
@@ -80,6 +77,7 @@ describe("NutPower Test", () => {
         expect((await nutpower.balanceOf(addr1.address)).free).equal(bn1e18.mul(new BN(200)).toString());
         expect(await nutpower.lockedNutOfPeriod(addr1.address, 2)).equal(bn1e18.mul(new BN(50)).toString());
         expect(await nutpower.redeemRequestCountOfPeriod(addr1.address, 2)).equal(1);
+        expect(await nutpower.totalIssuedNp()).equal(bn1e18.mul(new BN(200)).toString());
     });
 
     it("Upgrade test", async () => {
